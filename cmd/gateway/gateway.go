@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"runtime"
 	"sync"
 	"time"
 
@@ -54,6 +53,21 @@ type client struct {
 	dec  *gob.Decoder
 }
 
+func (c client) posts(threadID, limit uint32) ([]Identified, error) {
+	if err := c.enc.Encode([2]uint32{limit, threadID}); err != nil {
+		return nil, fmt.Errorf(`encode: %w`, err)
+	}
+	var res []uint32
+	if err := c.dec.Decode(&res); err != nil {
+		return nil, fmt.Errorf(`decode: %w`, err)
+	}
+	output := make([]Identified, len(res))
+	for i, id := range res {
+		output[i].ID = id
+	}
+	return output, nil
+}
+
 var pool = sync.Pool{
 	New: func() any {
 		conn, err := net.Dial(`tcp`, `[::]:8001`)
@@ -67,9 +81,9 @@ var pool = sync.Pool{
 			enc:  gob.NewEncoder(conn),
 			dec:  gob.NewDecoder(conn),
 		}
-		runtime.SetFinalizer(c, c.conn.Close)
+		// runtime.SetFinalizer(c, c.conn.Close)
 
-		return conn
+		return c
 	},
 }
 
@@ -77,32 +91,10 @@ func resolvePosts(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
 	thread := p.Source.(Identified)
 
-	// TODO: connection pooling
-	// conn := pool.Get().(net.Conn)
-	conn, err := net.Dial(`tcp`, `[::]:8001`)
-	if err != nil {
-		return nil, fmt.Errorf(`dial: %w`, err)
-	}
+	conn := pool.Get().(*client)
+	defer pool.Put(conn)
 
-	// make request
-	if err := gob.NewEncoder(conn).Encode([2]uint32{uint32(limit), thread.ID}); err != nil {
-		return nil, fmt.Errorf(`gob encode: %w`, err)
-	}
-
-	// process response
-	var res []uint32
-	if err := gob.NewDecoder(conn).Decode(&res); err != nil {
-		return nil, fmt.Errorf(`gob decode: %w`, err)
-	}
-
-	// convert to model
-	output := make([]Identified, limit)
-	for i, id := range res {
-		output[i].ID = id
-	}
-
-	// pool.Put(conn)
-	return output, conn.Close()
+	return conn.posts(thread.ID, uint32(limit))
 }
 
 var (
