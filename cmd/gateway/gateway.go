@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	dataloader "github.com/graph-gophers/dataloader/v7"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 	"github.com/graphql-go/handler"
@@ -57,19 +58,48 @@ type client struct {
 }
 
 func (c client) posts(threadID, limit uint32) ([]Identified, error) {
-	// time.Sleep(time.Millisecond * 20)
-	if err := c.enc.Encode([2]uint32{limit, threadID}); err != nil {
+	// time.Sleep(time.Millisecond * 20) // TODO: batching
+	// if err := c.enc.Encode([2]uint32{limit, threadID}); err != nil {
+	// 	return nil, fmt.Errorf(`encode: %w`, err)
+	// }
+	if err := c.enc.Encode(PostsRequest{Limit: limit, Threads: []uint32{threadID}}); err != nil {
 		return nil, fmt.Errorf(`encode: %w`, err)
 	}
-	var res []uint32
-	if err := c.dec.Decode(&res); err != nil {
+	var batch PostsResponse
+	if err := c.dec.Decode(&batch); err != nil {
 		return nil, fmt.Errorf(`decode: %w`, err)
 	}
+	res := batch.Posts[threadID]
 	output := make([]Identified, len(res))
 	for i, id := range res {
 		output[i].ID = id
 	}
 	return output, nil
+}
+
+type PostRequest struct {
+	Limit  uint32
+	Thread uint32
+}
+
+type PostsRequest struct {
+	Limit   uint32
+	Threads []uint32
+}
+
+type PostsResponse struct {
+	Posts map[uint32][]uint32
+}
+
+func (c client) postsBatch(limit uint32, threads []uint32) (map[uint32][]uint32, error) {
+	if err := c.enc.Encode(PostsRequest{Limit: limit, Threads: threads}); err != nil {
+		return nil, fmt.Errorf(`encode: %w`, err)
+	}
+	var res PostsResponse
+	if err := c.dec.Decode(&res); err != nil {
+		return nil, fmt.Errorf(`decode: %w`, err)
+	}
+	return res.Posts, nil
 }
 
 var pool = sync.Pool{
@@ -95,10 +125,33 @@ func resolvePosts(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
 	thread := p.Source.(Identified)
 
-	conn := pool.Get().(*client)
-	defer pool.Put(conn)
+	return func() (any, error) {
+		// TODO: trace thunks!
+		conn := pool.Get().(*client)
+		defer pool.Put(conn)
 
-	return conn.posts(thread.ID, uint32(limit))
+		return conn.posts(thread.ID, uint32(limit))
+	}, nil
+}
+
+func resolvePostsBatch(p graphql.ResolveParams) (any, error) {
+	limit := p.Args[`limit`].(int)
+	thread := p.Source.(Identified)
+	loader := p.Context.Value(loaderKey).(func(context.Context, PostRequest) dataloader.Thunk[[]uint32])
+
+	thunk := loader(p.Context, PostRequest{
+		Limit:  uint32(limit),
+		Thread: thread.ID,
+	})
+
+	return func() (any, error) {
+		posts, err := thunk()
+		out := make([]Identified, len(posts))
+		for i, postID := range posts {
+			out[i].ID = postID
+		}
+		return out, err
+	}, nil
 }
 
 var (
@@ -174,6 +227,8 @@ type resolverTrace struct {
 type ctxKey string
 
 const traceKey = ctxKey(`tracer`)
+const parentKey = ctxKey(`parent`)
+const loaderKey = ctxKey(`loader`)
 
 func (t tracer) wrap(h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +279,7 @@ func (t tracer) wrap(h http.Handler) http.HandlerFunc {
 func (t tracer) TraceQuery(ctx context.Context, queryString, operationName string) (context.Context, graphql.TraceQueryFinishFunc) {
 
 	log.Printf(`traceQuery: start %q`, operationName)
+	ctx = context.WithValue(ctx, parentKey, []any{operationName})
 
 	return ctx, func(fe []gqlerrors.FormattedError) {
 
@@ -238,10 +294,12 @@ func (t tracer) TraceField(ctx context.Context, fieldName, typeName string) (con
 	}
 
 	ext := ctx.Value(traceKey).(*tracingExtension)
+	parents := append(ctx.Value(parentKey).([]any), fieldName, typeName)
+	ctx = context.WithValue(ctx, parentKey, parents)
 
 	start := time.Now()
 	span := &resolverTrace{
-		Path:  []any{fieldName, typeName},
+		Path:  parents,
 		Start: uint(time.Since(ext.Start)), // TODO: based on `start`
 	}
 	ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
@@ -251,11 +309,69 @@ func (t tracer) TraceField(ctx context.Context, fieldName, typeName string) (con
 	}
 }
 
+// func (t tracer) TraceBatch() {
+// 	// TODO
+// }
+
+func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]uint32] {
+	// time.Sleep(20 * time.Millisecond) // TODO: remove
+
+	ext := ctx.Value(traceKey).(*tracingExtension)
+	start := time.Now()
+	span := &resolverTrace{
+		Path:  []any{`batch`, `Post`},
+		Start: uint(time.Since(ext.Start)),
+	}
+	ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
+
+	limit := keys[0].Limit
+	threads := make([]uint32, len(keys))
+	for i, req := range keys {
+		if req.Limit != limit {
+			panic(`non-equal limits!`)
+		}
+		threads[i] = req.Thread
+	}
+	res := make([]*dataloader.Result[[]uint32], len(keys))
+
+	conn := pool.Get().(*client)
+	defer pool.Put(conn)
+
+	data, err := conn.postsBatch(limit, threads)
+	if err != nil {
+		for i := range res {
+			res[i] = &dataloader.Result[[]uint32]{Error: err}
+		}
+		return res
+	}
+
+	for i, req := range keys {
+		res[i] = &dataloader.Result[[]uint32]{
+			Data: data[req.Thread],
+		}
+	}
+
+	span.Duration = uint(time.Since(start))
+
+	return res
+}
+
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	schema, err := graphql.NewSchema(schema)
 	check(err)
+
 	t := &tracer{}
+
+	loader := dataloader.NewBatchedLoader(
+		loadBatch,
+		dataloader.WithWait[PostRequest, []uint32](time.Millisecond),
+		dataloader.WithBatchCapacity[PostRequest, []uint32](10),
+		dataloader.WithClearCacheOnBatch[PostRequest, []uint32](),
+		// dataloader.WithTracer[PostRequest, []uint32](t),
+		// TODO dataloader.WithTracer(t))
+	)
+
 	h := handler.New(&handler.Config{
 		Schema:     &schema,
 		Playground: true,
@@ -267,10 +383,9 @@ func main() {
 	server := http.Server{
 		Addr: `[::]:8000`,
 		BaseContext: func(l net.Listener) context.Context {
-
-			// TODO: dataloader
-
-			return context.Background()
+			ctx := context.Background()
+			ctx = context.WithValue(ctx, loaderKey, loader.Load)
+			return ctx
 		},
 		Handler: measure(mux),
 	}
