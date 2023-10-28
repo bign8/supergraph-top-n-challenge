@@ -25,119 +25,8 @@ func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	db, err := sql.Open(`postgres`, DSN)
 	check(err)
-	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
+	p, err := newProcessor(db)
 	check(err)
-	fetchThreadPostsViaArray, err := db.Prepare(`SELECT ARRAY(SELECT id FROM posts WHERE thread_id = $1 LIMIT $2);`)
-	check(err)
-	fetchMultiThreadPosts, err := db.Prepare(`SELECT thread_id, (array_agg(id))[1:$2] FROM posts
-		WHERE thread_id = ANY($1) GROUP BY thread_id;`)
-	check(err)
-
-	/*
-		// logical unit tests on queries (should be unit tests!)
-
-		THREADS := []int32{
-			1704120699,
-			760694634,
-			1041771526,
-			355369712,
-			693787124,
-			464032376,
-			338943421,
-			627233705,
-			1247484754,
-			144833217,
-			864959089,
-			550614719,
-			86996137,
-			1220619720,
-			1653820545,
-			186457978,
-			531820194,
-			1002078996,
-			1001164236,
-			934420795,
-			1648048755,
-			1651650915,
-			1210145148,
-			781737299,
-			946891028,
-			1441550032,
-			635110282,
-			568029274,
-			597979419,
-			909925540,
-			11224305,
-			465429524,
-			1139094954,
-			889600381,
-			1843137403,
-			1685445639,
-			296975846,
-			1981157226,
-			996970829,
-			1347165303,
-		}
-		LIMIT := 20
-
-		// TESTING using sub-queries and Arrays
-		now := time.Now()
-		// warning: if limit is signifigantly less than 2000 (max number of threads per post) this may be slower
-		check(err)
-		rows, err := fetchMultiThreadPosts.Query(pq.Int32Array(THREADS), LIMIT)
-		check(err)
-		for rows.Next() {
-			var (
-				thread uint32
-				posts  pq.Int32Array
-			)
-			check(rows.Scan(&thread, &posts))
-			if thread == uint32(THREADS[0]) {
-				log.Printf(`thread: %d; posts: %v`, thread, len(posts))
-			}
-		}
-		check(rows.Close())
-		log.Printf(`sub-queries: %s`, time.Since(now))
-
-		// boring method
-		now = time.Now()
-		for _, threadID := range THREADS {
-			rows, err = fetchThreadPostsViaRows.Query(threadID, LIMIT)
-			check(err)
-			var count uint32
-			for rows.Next() {
-				var post uint32
-				check(rows.Scan(&post))
-				count++
-			}
-			if threadID == THREADS[0] {
-				log.Printf(`thread: %d; posts: %d`, threadID, count)
-			}
-			check(rows.Close())
-		}
-		log.Printf(`linear: %s`, time.Since(now))
-
-		// array parser
-		now = time.Now()
-		for _, threadID := range THREADS {
-			var posts pq.Int32Array // this is slightly faster!!!
-			row := fetchThreadPostsViaArray.QueryRow(threadID, LIMIT)
-			check(row.Scan(&posts))
-			check(row.Err())
-			if threadID == THREADS[0] {
-				log.Printf(`thread: %d; posts: %d`, threadID, len(posts))
-			}
-		}
-		log.Printf(`array: %s`, time.Since(now))
-
-		//*/
-
-	p := &processor{
-		threadPostsViaRows:  fetchThreadPostsViaRows,
-		threadPostsViaArray: fetchThreadPostsViaArray,
-		multiThreadPosts:    fetchMultiThreadPosts,
-	}
-
 	l, err := net.Listen(`tcp`, `:8001`) // TODO: test UDP
 	check(err)
 	log.Printf(`posts on %v`, l.Addr())
@@ -155,6 +44,22 @@ type processor struct {
 	threadPostsViaRows  *sql.Stmt
 	threadPostsViaArray *sql.Stmt
 	multiThreadPosts    *sql.Stmt
+}
+
+func newProcessor(db *sql.DB) (*processor, error) {
+	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
+	check(err)
+	fetchThreadPostsViaArray, err := db.Prepare(`SELECT ARRAY(SELECT id FROM posts WHERE thread_id = $1 LIMIT $2);`)
+	check(err)
+	fetchMultiThreadPosts, err := db.Prepare(`SELECT thread_id, (array_agg(id))[1:$2] FROM posts
+		WHERE thread_id = ANY($1) GROUP BY thread_id;`)
+	check(err)
+
+	return &processor{
+		threadPostsViaRows:  fetchThreadPostsViaRows,
+		threadPostsViaArray: fetchThreadPostsViaArray,
+		multiThreadPosts:    fetchMultiThreadPosts,
+	}, nil
 }
 
 /*
@@ -263,7 +168,7 @@ func (p processor) processBatch(conn net.Conn) error {
 }
 
 // TODO: measure (used in processBatch)
-func (p processor) fetchBatchFanOut(args PostsRequest) PostsResponse {
+func (p processor) fetchBatchFanOut(args PostsRequest, fn func(threadID, limit uint32) ([]uint32, error)) PostsResponse {
 	// TODO: short circut if only 1 thread fetched
 
 	start := time.Now()
@@ -275,7 +180,7 @@ func (p processor) fetchBatchFanOut(args PostsRequest) PostsResponse {
 	for _, threadID := range args.Threads {
 		go func(threadID uint32) {
 			defer wg.Done()
-			out, err := p.fetchThreadPostsViaArray(threadID, args.Limit)
+			out, err := fn(threadID, args.Limit)
 			if err != nil {
 				panic(err)
 			}
