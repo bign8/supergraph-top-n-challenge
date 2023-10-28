@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // postgres populated with data from db/posts.sql
@@ -62,8 +61,7 @@ func TestProcessor(t *testing.T) {
 		return
 	}
 
-	p, err := newProcessor(db)
-	require.NoError(t, err)
+	p := newProcessor(db)
 
 	check := func(tb testing.TB, res PostsResponse) {
 		assert.Len(tb, res.Posts, 40)

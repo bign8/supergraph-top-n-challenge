@@ -15,7 +15,7 @@ import (
 
 func check(err error) {
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 }
 
@@ -25,8 +25,7 @@ func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	db, err := sql.Open(`postgres`, DSN)
 	check(err)
-	p, err := newProcessor(db)
-	check(err)
+	p := newProcessor(db)
 	l, err := net.Listen(`tcp`, `:8001`) // TODO: test UDP
 	check(err)
 	log.Printf(`posts on %v`, l.Addr())
@@ -46,7 +45,7 @@ type processor struct {
 	multiThreadPosts    *sql.Stmt
 }
 
-func newProcessor(db *sql.DB) (*processor, error) {
+func newProcessor(db *sql.DB) *processor {
 	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
 	check(err)
 	fetchThreadPostsViaArray, err := db.Prepare(`SELECT ARRAY(SELECT id FROM posts WHERE thread_id = $1 LIMIT $2);`)
@@ -54,49 +53,10 @@ func newProcessor(db *sql.DB) (*processor, error) {
 	fetchMultiThreadPosts, err := db.Prepare(`SELECT thread_id, (array_agg(id))[1:$2] FROM posts
 		WHERE thread_id = ANY($1) GROUP BY thread_id;`)
 	check(err)
-
 	return &processor{
 		threadPostsViaRows:  fetchThreadPostsViaRows,
 		threadPostsViaArray: fetchThreadPostsViaArray,
 		multiThreadPosts:    fetchMultiThreadPosts,
-	}, nil
-}
-
-/*
-Frame Format: (all values are uint32)
-Input: [limit][thread_id]
-Output: [length][post1_id][post2_id]...[postN_id]
-*/
-
-// TODO: batch fetch sets of post IDs
-
-func (p processor) process(conn net.Conn) error {
-	defer conn.Close()
-	reader := gob.NewDecoder(conn)
-	writer := gob.NewEncoder(conn)
-	for {
-
-		// parse input
-		var args [2]uint32
-		if err := reader.Decode(&args); err == io.EOF {
-			log.Printf(`closing connection: %v`, conn.RemoteAddr())
-			return nil
-		} else if err != nil {
-			return fmt.Errorf(`decode: %w`, err)
-		}
-		limit := args[0]
-		threadID := args[1]
-
-		// query database
-		out, err := p.fetchThreadPostsViaRows(threadID, limit)
-		if err != nil {
-			return fmt.Errorf(`fetchThread: %w`, err)
-		}
-
-		// write result
-		if err := writer.Encode(out); err != nil {
-			return fmt.Errorf(`encode: %w`, err)
-		}
 	}
 }
 
@@ -181,9 +141,7 @@ func (p processor) fetchBatchFanOut(args PostsRequest, fn func(threadID, limit u
 		go func(threadID uint32) {
 			defer wg.Done()
 			out, err := fn(threadID, args.Limit)
-			if err != nil {
-				panic(err)
-			}
+			check(err)
 			stage.Store(threadID, out)
 		}(threadID)
 	}
@@ -215,17 +173,13 @@ func (p processor) fetchBatchMulti(args PostsRequest) PostsResponse {
 	}
 
 	rows, err := p.multiThreadPosts.Query(pq.Int32Array(threads), args.Limit)
-	if err != nil {
-		panic(err)
-	}
+	check(err)
 	var (
 		thread      uint32
 		postsSigned pq.Int32Array
 	)
 	for rows.Next() {
-		if err := rows.Scan(&thread, &postsSigned); err != nil {
-			panic(err)
-		}
+		check(rows.Scan(&thread, &postsSigned))
 
 		// convert signed to unsigned (postgres => domain)
 		posts := make([]uint32, len(postsSigned))
@@ -234,9 +188,7 @@ func (p processor) fetchBatchMulti(args PostsRequest) PostsResponse {
 		}
 		result.Posts[thread] = posts
 	}
-	if err := rows.Err(); err != nil {
-		panic(err)
-	}
+	check(rows.Err())
 
 	log.Printf(`fetching %d posts of %d threads took %s`, args.Limit, len(args.Threads), time.Since(start))
 	return result
