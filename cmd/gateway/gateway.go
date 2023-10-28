@@ -176,7 +176,7 @@ var (
 									Fields: graphql.Fields{`id`: ID},
 								})),
 								Args:    Limit,
-								Resolve: resolvePosts,
+								Resolve: resolvePostsBatch,
 							},
 						},
 					})),
@@ -366,7 +366,7 @@ func main() {
 	loader := dataloader.NewBatchedLoader(
 		loadBatch,
 		dataloader.WithWait[PostRequest, []uint32](time.Millisecond),
-		dataloader.WithBatchCapacity[PostRequest, []uint32](10),
+		// dataloader.WithBatchCapacity[PostRequest, []uint32](10),
 		dataloader.WithClearCacheOnBatch[PostRequest, []uint32](),
 		// dataloader.WithTracer[PostRequest, []uint32](t),
 		// TODO dataloader.WithTracer(t))
