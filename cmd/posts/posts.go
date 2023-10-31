@@ -7,8 +7,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"sync"
-	"time"
 
 	"github.com/lib/pq"
 )
@@ -23,9 +21,8 @@ const DSN = `postgres://postgres:postgrespassword@[::]:7432?sslmode=disable`
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
-	db, err := sql.Open(`postgres`, DSN)
+	p, err := newProcessor()
 	check(err)
-	p := newProcessor(db)
 	l, err := net.Listen(`tcp`, `:8001`) // TODO: test UDP
 	check(err)
 	log.Printf(`posts on %v`, l.Addr())
@@ -40,12 +37,14 @@ func main() {
 }
 
 type processor struct {
-	threadPostsViaRows  *sql.Stmt
-	threadPostsViaArray *sql.Stmt
+	threadPostsViaRows  *sql.Stmt // SLOW: see usage in posts_test
+	threadPostsViaArray *sql.Stmt // SLOW: see usage in posts_test
 	multiThreadPosts    *sql.Stmt
 }
 
-func newProcessor(db *sql.DB) *processor {
+func newProcessor() (*processor, error) {
+	db, err := sql.Open(`postgres`, DSN)
+	check(err)
 	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
 	check(err)
 	fetchThreadPostsViaArray, err := db.Prepare(`SELECT ARRAY(SELECT id FROM posts WHERE thread_id = $1 LIMIT $2);`)
@@ -57,49 +56,16 @@ func newProcessor(db *sql.DB) *processor {
 		threadPostsViaRows:  fetchThreadPostsViaRows,
 		threadPostsViaArray: fetchThreadPostsViaArray,
 		multiThreadPosts:    fetchMultiThreadPosts,
-	}
-}
-
-// TODO: measure (used in fetchBatchFanOut)
-func (p processor) fetchThreadPostsViaRows(threadID, limit uint32) ([]uint32, error) {
-	rows, err := p.threadPostsViaRows.Query(threadID, limit)
-	if err != nil {
-		return nil, fmt.Errorf(`query: %w`, err)
-	}
-	output := make([]uint32, 0, limit)
-	for rows.Next() {
-		var id uint32
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf(`scan: %w`, err)
-		}
-		output = append(output, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf(`close: %w`, err)
-	}
-	return output, nil
-}
-
-// TODO: measure (used in fetchBatchFanOut)
-func (p processor) fetchThreadPostsViaArray(threadID, limit uint32) ([]uint32, error) {
-	var arr pq.Int32Array
-	if err := p.threadPostsViaArray.QueryRow(threadID, limit).Scan(&arr); err != nil {
-		return nil, fmt.Errorf(`query/scan: %w`, err)
-	}
-	output := make([]uint32, len(arr))
-	for i, out := range arr {
-		output[i] = uint32(out)
-	}
-	return output, nil
+	}, nil
 }
 
 type PostsRequest struct {
-	Limit   uint32
-	Threads []uint32
+	Limit   int32
+	Threads []int32
 }
 
 type PostsResponse struct {
-	Posts map[uint32][]uint32
+	Posts map[int32][]int32
 }
 
 func (p processor) processBatch(conn net.Conn) error {
@@ -128,42 +94,10 @@ func (p processor) processBatch(conn net.Conn) error {
 }
 
 // TODO: measure (used in processBatch)
-func (p processor) fetchBatchFanOut(args PostsRequest, fn func(threadID, limit uint32) ([]uint32, error)) PostsResponse {
-	// TODO: short circut if only 1 thread fetched
-
-	start := time.Now()
-
-	// query database
-	var wg sync.WaitGroup
-	var stage sync.Map
-	wg.Add(int(len(args.Threads)))
-	for _, threadID := range args.Threads {
-		go func(threadID uint32) {
-			defer wg.Done()
-			out, err := fn(threadID, args.Limit)
-			check(err)
-			stage.Store(threadID, out)
-		}(threadID)
-	}
-	wg.Wait()
-
-	// serialize
-	result := PostsResponse{
-		Posts: make(map[uint32][]uint32, int(args.Limit)),
-	}
-	stage.Range(func(key, value any) bool {
-		result.Posts[key.(uint32)] = value.([]uint32)
-		return true
-	})
-	log.Printf(`fetching %d posts of %d threads took %s`, args.Limit, len(args.Threads), time.Since(start))
-	return result
-}
-
-// TODO: measure (used in processBatch)
 func (p processor) fetchBatchMulti(args PostsRequest) PostsResponse {
-	start := time.Now()
+	// start := time.Now()
 	result := PostsResponse{
-		Posts: make(map[uint32][]uint32, len(args.Threads)),
+		Posts: make(map[int32][]int32, len(args.Threads)),
 	}
 
 	// convert unsigned => signed (domain => postgres)
@@ -175,21 +109,15 @@ func (p processor) fetchBatchMulti(args PostsRequest) PostsResponse {
 	rows, err := p.multiThreadPosts.Query(pq.Int32Array(threads), args.Limit)
 	check(err)
 	var (
-		thread      uint32
+		thread      int32
 		postsSigned pq.Int32Array
 	)
 	for rows.Next() {
 		check(rows.Scan(&thread, &postsSigned))
-
-		// convert signed to unsigned (postgres => domain)
-		posts := make([]uint32, len(postsSigned))
-		for i, postID := range postsSigned {
-			posts[i] = uint32(postID)
-		}
-		result.Posts[thread] = posts
+		result.Posts[thread] = postsSigned
 	}
 	check(rows.Err())
 
-	log.Printf(`fetching %d posts of %d threads took %s`, args.Limit, len(args.Threads), time.Since(start))
+	// log.Printf(`fetching %d posts of %d threads took %s`, args.Limit, len(args.Threads), time.Since(start))
 	return result
 }

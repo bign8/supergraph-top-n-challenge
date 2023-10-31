@@ -57,41 +57,21 @@ type client struct {
 	dec  *gob.Decoder
 }
 
-func (c client) posts(threadID, limit uint32) ([]Identified, error) {
-	// time.Sleep(time.Millisecond * 20) // TODO: batching
-	// if err := c.enc.Encode([2]uint32{limit, threadID}); err != nil {
-	// 	return nil, fmt.Errorf(`encode: %w`, err)
-	// }
-	if err := c.enc.Encode(PostsRequest{Limit: limit, Threads: []uint32{threadID}}); err != nil {
-		return nil, fmt.Errorf(`encode: %w`, err)
-	}
-	var batch PostsResponse
-	if err := c.dec.Decode(&batch); err != nil {
-		return nil, fmt.Errorf(`decode: %w`, err)
-	}
-	res := batch.Posts[threadID]
-	output := make([]Identified, len(res))
-	for i, id := range res {
-		output[i].ID = int32(id)
-	}
-	return output, nil
-}
-
 type PostRequest struct {
-	Limit  uint32
-	Thread uint32
+	Limit  int32
+	Thread int32
 }
 
 type PostsRequest struct {
-	Limit   uint32
-	Threads []uint32
+	Limit   int32
+	Threads []int32
 }
 
 type PostsResponse struct {
-	Posts map[uint32][]uint32
+	Posts map[int32][]int32
 }
 
-func (c client) postsBatch(limit uint32, threads []uint32) (map[uint32][]uint32, error) {
+func (c client) postsBatch(limit int32, threads []int32) (map[int32][]int32, error) {
 	if err := c.enc.Encode(PostsRequest{Limit: limit, Threads: threads}); err != nil {
 		return nil, fmt.Errorf(`encode: %w`, err)
 	}
@@ -121,34 +101,21 @@ var pool = sync.Pool{
 	},
 }
 
-func resolvePosts(p graphql.ResolveParams) (any, error) {
-	limit := p.Args[`limit`].(int)
-	thread := p.Source.(Identified)
-
-	return func() (any, error) {
-		// TODO: trace thunks!
-		conn := pool.Get().(*client)
-		defer pool.Put(conn)
-
-		return conn.posts(uint32(thread.ID), uint32(limit))
-	}, nil
-}
-
 func resolvePostsBatch(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
 	thread := p.Source.(Identified)
-	loader := p.Context.Value(loaderKey).(func(context.Context, PostRequest) dataloader.Thunk[[]uint32])
+	loader := p.Context.Value(loaderKey).(func(context.Context, PostRequest) dataloader.Thunk[[]int32])
 
 	thunk := loader(p.Context, PostRequest{
-		Limit:  uint32(limit),
-		Thread: uint32(thread.ID),
+		Limit:  int32(limit),
+		Thread: thread.ID,
 	})
 
 	return func() (any, error) {
 		posts, err := thunk()
 		out := make([]Identified, len(posts))
 		for i, postID := range posts {
-			out[i].ID = int32(postID)
+			out[i].ID = postID
 		}
 		return out, err
 	}, nil
@@ -313,7 +280,7 @@ func (t tracer) TraceField(ctx context.Context, fieldName, typeName string) (con
 // 	// TODO
 // }
 
-func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]uint32] {
+func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]int32] {
 	// time.Sleep(20 * time.Millisecond) // TODO: remove
 
 	ext := ctx.Value(traceKey).(*tracingExtension)
@@ -325,14 +292,14 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]u
 	ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
 
 	limit := keys[0].Limit
-	threads := make([]uint32, len(keys))
+	threads := make([]int32, len(keys))
 	for i, req := range keys {
 		if req.Limit != limit {
 			panic(`non-equal limits!`)
 		}
 		threads[i] = req.Thread
 	}
-	res := make([]*dataloader.Result[[]uint32], len(keys))
+	res := make([]*dataloader.Result[[]int32], len(keys))
 
 	conn := pool.Get().(*client)
 	defer pool.Put(conn)
@@ -340,13 +307,13 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]u
 	data, err := conn.postsBatch(limit, threads)
 	if err != nil {
 		for i := range res {
-			res[i] = &dataloader.Result[[]uint32]{Error: err}
+			res[i] = &dataloader.Result[[]int32]{Error: err}
 		}
 		return res
 	}
 
 	for i, req := range keys {
-		res[i] = &dataloader.Result[[]uint32]{
+		res[i] = &dataloader.Result[[]int32]{
 			Data: data[req.Thread],
 		}
 	}
@@ -365,10 +332,10 @@ func main() {
 
 	loader := dataloader.NewBatchedLoader(
 		loadBatch,
-		dataloader.WithWait[PostRequest, []uint32](time.Millisecond),
-		// dataloader.WithBatchCapacity[PostRequest, []uint32](10),
-		dataloader.WithClearCacheOnBatch[PostRequest, []uint32](),
-		// dataloader.WithTracer[PostRequest, []uint32](t),
+		dataloader.WithWait[PostRequest, []int32](time.Millisecond),
+		// dataloader.WithBatchCapacity[PostRequest, []int32](10),
+		dataloader.WithClearCacheOnBatch[PostRequest, []int32](),
+		// dataloader.WithTracer[PostRequest, []int32](t),
 		// TODO dataloader.WithTracer(t))
 	)
 
