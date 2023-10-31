@@ -9,6 +9,8 @@ import (
 	"net"
 
 	"github.com/lib/pq"
+
+	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 )
 
 func check(err error) {
@@ -42,7 +44,7 @@ type processor struct {
 }
 
 func newProcessor() (*processor, error) {
-	db, err := sql.Open(`postgres`, DSN)
+	db, err := sql.Open(`postgres`, env.Default(`THREADS_DSN`, DSN))
 	if err != nil {
 		return nil, fmt.Errorf(`sql.Open: %w`, err)
 	}

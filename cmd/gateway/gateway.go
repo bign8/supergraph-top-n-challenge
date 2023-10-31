@@ -17,6 +17,8 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 	"github.com/graphql-go/handler"
+
+	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 )
 
 type Identified struct {
@@ -27,7 +29,7 @@ func resolveThreads(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
 
 	// TODO: connection pooling
-	conn, err := net.Dial(`tcp`, `[::]:8002`)
+	conn, err := net.Dial(`tcp`, env.Default(`THREADS_HOST`, `[::]:8002`))
 	if err != nil {
 		return nil, fmt.Errorf(`dial: %w`, err)
 	}
@@ -84,7 +86,7 @@ func (c client) postsBatch(limit int32, threads []int32) (map[int32][]int32, err
 
 var pool = sync.Pool{
 	New: func() any {
-		conn, err := net.Dial(`tcp`, `[::]:8001`)
+		conn, err := net.Dial(`tcp`, env.Default(`POSTS_HOST`, `[::]:8001`))
 		if err != nil {
 			panic(err)
 		}

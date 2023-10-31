@@ -9,6 +9,8 @@ import (
 	"net"
 
 	"github.com/lib/pq"
+
+	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 )
 
 func check(err error) {
@@ -43,7 +45,7 @@ type processor struct {
 }
 
 func newProcessor() (*processor, error) {
-	db, err := sql.Open(`postgres`, DSN)
+	db, err := sql.Open(`postgres`, env.Default(`POSTS_DSN`, DSN))
 	check(err)
 	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
 	check(err)

@@ -1,23 +1,36 @@
 version: '3'
 services:
+
   gateway:
     build:
       args:
         COMPONENT: gateway
     ports:
       - '8000:8000'
-    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - POSTS_HOST=host.docker.internal:8001
+      - THREADS_HOST=host.docker.internal:8002
+
   posts:
     build:
       args:
         COMPONENT: posts
     ports:
       - '8001:8001'
-    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - POSTS_DSN=postgres://postgres:postgrespassword@host.docker.internal:7432?sslmode=disable
+
   threads:
     build:
       args:
         COMPONENT: threads
     ports:
       - '8002:8002'
-    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - THREADS_DSN=postgres://postgres:postgrespassword@host.docker.internal:8432?sslmode=disable
