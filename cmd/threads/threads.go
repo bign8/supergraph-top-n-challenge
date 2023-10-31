@@ -8,7 +8,7 @@ import (
 	"log"
 	"net"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 func check(err error) {
@@ -21,12 +21,8 @@ const DSN = `postgres://postgres:postgrespassword@[::]:8432?sslmode=disable`
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
-	db, err := sql.Open(`postgres`, DSN)
+	p, err := newProcessor()
 	check(err)
-	query, err := db.Prepare(`SELECT id FROM threads LIMIT $1;`)
-	check(err)
-	p := &processor{stmt: query}
-
 	l, err := net.Listen(`tcp`, `:8002`) // TODO: test UDP
 	check(err)
 	log.Printf(`threads on %v`, l.Addr())
@@ -41,14 +37,33 @@ func main() {
 }
 
 type processor struct {
-	stmt *sql.Stmt
+	rowsParser *sql.Stmt
+	arrParser  *sql.Stmt
+}
+
+func newProcessor() (*processor, error) {
+	db, err := sql.Open(`postgres`, DSN)
+	if err != nil {
+		return nil, fmt.Errorf(`sql.Open: %w`, err)
+	}
+	rowsParser, err := db.Prepare(`SELECT id FROM threads LIMIT $1;`)
+	if err != nil {
+		return nil, fmt.Errorf(`db.Prepare(rows): %w`, err)
+	}
+	arrParser, err := db.Prepare(`SELECT ARRAY_AGG(a.id) FROM (SELECT id FROM threads LIMIT $1) a;`)
+	if err != nil {
+		return nil, fmt.Errorf(`db.Prepare(arr): %w`, err)
+	}
+	return &processor{
+		rowsParser: rowsParser,
+		arrParser:  arrParser,
+	}, nil
 }
 
 /*
-Frame Format: (all values are uint32)
+Frame Format: (all values are int32)
 Input: [limit]
 Output: gob([thread1_id][thread2_id]...[threadN_id])
-// TODO: length should == limit
 */
 
 func (p processor) process(conn net.Conn) error {
@@ -58,7 +73,7 @@ func (p processor) process(conn net.Conn) error {
 	for {
 
 		// parse input
-		var limit uint32
+		var limit int32
 		if err := reader.Decode(&limit); err == io.EOF {
 			log.Printf(`closing connection: %v`, conn.RemoteAddr())
 			return nil
@@ -68,20 +83,9 @@ func (p processor) process(conn net.Conn) error {
 		log.Printf(`got %d`, limit)
 
 		// query database
-		rows, err := p.stmt.Query(limit)
+		output, err := p.processRows(limit)
 		if err != nil {
-			return fmt.Errorf(`query: %w`, err)
-		}
-		output := make([]uint32, 0, limit)
-		for rows.Next() {
-			var id uint32
-			if err := rows.Scan(&id); err != nil {
-				return fmt.Errorf(`scan: %w`, err)
-			}
-			output = append(output, id)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf(`close: %w`, err)
+			return fmt.Errorf(`process: %w`, err)
 		}
 
 		// write result
@@ -89,4 +93,32 @@ func (p processor) process(conn net.Conn) error {
 			return fmt.Errorf(`encode: %w`, err)
 		}
 	}
+}
+
+func (p processor) processRows(limit int32) ([]int32, error) {
+	rows, err := p.rowsParser.Query(limit)
+	if err != nil {
+		return nil, fmt.Errorf(`query: %w`, err)
+	}
+	output := make([]int32, 0, limit)
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(`scan: %w`, err)
+		}
+		output = append(output, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf(`close: %w`, err)
+	}
+	return output, nil
+}
+
+// randomly is slower than `processRows` even though parsing is faster + easier
+func (p processor) processArray(limit int32) ([]int32, error) {
+	var list pq.Int32Array
+	if err := p.arrParser.QueryRow(limit).Scan(&list); err != nil {
+		return nil, fmt.Errorf(`query/scan: %w`, err)
+	}
+	return list, nil
 }

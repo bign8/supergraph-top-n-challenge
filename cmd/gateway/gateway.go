@@ -20,7 +20,7 @@ import (
 )
 
 type Identified struct {
-	ID uint32 `json:"id"`
+	ID int32 `json:"id"`
 }
 
 func resolveThreads(p graphql.ResolveParams) (any, error) {
@@ -33,12 +33,12 @@ func resolveThreads(p graphql.ResolveParams) (any, error) {
 	}
 
 	// make request
-	if err := gob.NewEncoder(conn).Encode(uint32(limit)); err != nil {
+	if err := gob.NewEncoder(conn).Encode(int32(limit)); err != nil {
 		return nil, fmt.Errorf(`gob encode: %w`, err)
 	}
 
 	// process response
-	var res []uint32
+	var res []int32
 	if err := gob.NewDecoder(conn).Decode(&res); err != nil {
 		return nil, fmt.Errorf(`gob decode: %w`, err)
 	}
@@ -72,7 +72,7 @@ func (c client) posts(threadID, limit uint32) ([]Identified, error) {
 	res := batch.Posts[threadID]
 	output := make([]Identified, len(res))
 	for i, id := range res {
-		output[i].ID = id
+		output[i].ID = int32(id)
 	}
 	return output, nil
 }
@@ -130,7 +130,7 @@ func resolvePosts(p graphql.ResolveParams) (any, error) {
 		conn := pool.Get().(*client)
 		defer pool.Put(conn)
 
-		return conn.posts(thread.ID, uint32(limit))
+		return conn.posts(uint32(thread.ID), uint32(limit))
 	}, nil
 }
 
@@ -141,14 +141,14 @@ func resolvePostsBatch(p graphql.ResolveParams) (any, error) {
 
 	thunk := loader(p.Context, PostRequest{
 		Limit:  uint32(limit),
-		Thread: thread.ID,
+		Thread: uint32(thread.ID),
 	})
 
 	return func() (any, error) {
 		posts, err := thunk()
 		out := make([]Identified, len(posts))
 		for i, postID := range posts {
-			out[i].ID = postID
+			out[i].ID = int32(postID)
 		}
 		return out, err
 	}, nil
