@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,10 +26,10 @@ func BenchmarkProcessArray(b *testing.B) {
 	benchmark(b, p.processArray)
 }
 
-func benchmark(b *testing.B, subject func(limit int32) ([]int32, error)) {
+func benchmark(b *testing.B, subject func(ctx context.Context, limit int32) ([]int32, error)) {
 	b.Run(`2`, func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			rows, err := subject(2)
+			rows, err := subject(context.Background(), 2)
 			require.NoError(b, err)
 			assert.Len(b, rows, 2)
 		}
@@ -36,7 +37,7 @@ func benchmark(b *testing.B, subject func(limit int32) ([]int32, error)) {
 
 	b.Run(`20`, func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			rows, err := subject(20)
+			rows, err := subject(context.Background(), 20)
 			require.NoError(b, err)
 			assert.Len(b, rows, 20)
 		}
@@ -44,7 +45,7 @@ func benchmark(b *testing.B, subject func(limit int32) ([]int32, error)) {
 
 	b.Run(`100`, func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			rows, err := subject(100)
+			rows, err := subject(context.Background(), 100)
 			require.NoError(b, err)
 			assert.Len(b, rows, 100)
 		}
@@ -52,7 +53,7 @@ func benchmark(b *testing.B, subject func(limit int32) ([]int32, error)) {
 
 	b.Run(`1000`, func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			rows, err := subject(1000)
+			rows, err := subject(context.Background(), 1000)
 			require.NoError(b, err)
 			assert.Len(b, rows, 1000)
 		}

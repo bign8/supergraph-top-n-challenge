@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -79,7 +80,7 @@ func TestProcessor(t *testing.T) {
 	p := connect(t)
 
 	t.Run(`multi`, func(t *testing.T) {
-		res := p.fetchBatchMulti(request)
+		res := p.fetchBatchMulti(context.Background(), request)
 		checkResults(t, res)
 	})
 
@@ -101,21 +102,21 @@ func BenchmarkMulti(b *testing.B) {
 
 func BenchmarkFanOutArray(b *testing.B) {
 	p := connect(b)
-	benchmark(b, func(pr PostsRequest) PostsResponse {
+	benchmark(b, func(_ context.Context, pr PostsRequest) PostsResponse {
 		return p.fetchBatchFanOut(pr, p.fetchThreadPostsViaArray)
 	})
 }
 
 func BenchmarkFanOutRows(b *testing.B) {
 	p := connect(b)
-	benchmark(b, func(pr PostsRequest) PostsResponse {
+	benchmark(b, func(_ context.Context, pr PostsRequest) PostsResponse {
 		return p.fetchBatchFanOut(pr, p.fetchThreadPostsViaRows)
 	})
 }
 
-func benchmark(b *testing.B, subject func(PostsRequest) PostsResponse) {
+func benchmark(b *testing.B, subject func(context.Context, PostsRequest) PostsResponse) {
 	for i := 0; i < b.N; i++ {
-		res := subject(request)
+		res := subject(context.Background(), request)
 		checkResults(b, res)
 	}
 }

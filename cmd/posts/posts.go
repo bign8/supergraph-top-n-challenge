@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/gob"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"net"
 
 	"github.com/lib/pq"
+	"github.com/uptrace/opentelemetry-go-extra/otelsql"
+	"go.opentelemetry.io/otel"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
@@ -47,7 +50,7 @@ type processor struct {
 }
 
 func newProcessor() (*processor, error) {
-	db, err := sql.Open(`postgres`, env.Default(`POSTS_DSN`, DSN))
+	db, err := otelsql.Open(`postgres`, env.Default(`POSTS_DSN`, DSN))
 	check(err)
 	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
 	check(err)
@@ -88,17 +91,23 @@ func (p processor) processBatch(conn net.Conn) error {
 			return fmt.Errorf(`decode: %w`, err)
 		}
 
-		result := p.fetchBatchMulti(args)
+		// TODO: propagate span properties from request headers
+		ctx, span := otel.Tracer(``).Start(context.Background(), `processBatch`)
+
+		result := p.fetchBatchMulti(ctx, args)
 
 		// write result
 		if err := writer.Encode(result); err != nil {
+			span.RecordError(err)
+			span.End()
 			return fmt.Errorf(`encode: %w`, err)
 		}
+		span.End()
 	}
 }
 
 // TODO: measure (used in processBatch)
-func (p processor) fetchBatchMulti(args PostsRequest) PostsResponse {
+func (p processor) fetchBatchMulti(ctx context.Context, args PostsRequest) PostsResponse {
 	// start := time.Now()
 	result := PostsResponse{
 		Posts: make(map[int32][]int32, len(args.Threads)),
@@ -110,7 +119,7 @@ func (p processor) fetchBatchMulti(args PostsRequest) PostsResponse {
 		threads[i] = int32(threadID)
 	}
 
-	rows, err := p.multiThreadPosts.Query(pq.Int32Array(threads), args.Limit)
+	rows, err := p.multiThreadPosts.QueryContext(ctx, pq.Int32Array(threads), args.Limit)
 	check(err)
 	var (
 		thread      int32

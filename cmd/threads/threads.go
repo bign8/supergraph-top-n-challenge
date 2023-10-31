@@ -10,6 +10,7 @@ import (
 	"net"
 
 	"github.com/lib/pq"
+	"github.com/uptrace/opentelemetry-go-extra/otelsql"
 	"go.opentelemetry.io/otel"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
@@ -48,7 +49,7 @@ type processor struct {
 }
 
 func newProcessor() (*processor, error) {
-	db, err := sql.Open(`postgres`, env.Default(`THREADS_DSN`, DSN))
+	db, err := otelsql.Open(`postgres`, env.Default(`THREADS_DSN`, DSN))
 	if err != nil {
 		return nil, fmt.Errorf(`sql.Open: %w`, err)
 	}
@@ -87,11 +88,12 @@ func (p processor) process(conn net.Conn) error {
 			return fmt.Errorf(`decode: %w`, err)
 		}
 
-		_, span := otel.Tracer(``).Start(context.Background(), `processRequest`)
+		// TODO: propagate span properties from request headers
+		ctx, span := otel.Tracer(``).Start(context.Background(), `processRequest`)
 		log.Printf(`got %d`, limit)
 
 		// query database
-		output, err := p.processRows(limit)
+		output, err := p.processRows(ctx, limit)
 		if err != nil {
 			span.RecordError(err)
 			span.End()
@@ -108,8 +110,8 @@ func (p processor) process(conn net.Conn) error {
 	}
 }
 
-func (p processor) processRows(limit int32) ([]int32, error) {
-	rows, err := p.rowsParser.Query(limit)
+func (p processor) processRows(ctx context.Context, limit int32) ([]int32, error) {
+	rows, err := p.rowsParser.QueryContext(ctx, limit)
 	if err != nil {
 		return nil, fmt.Errorf(`query: %w`, err)
 	}
@@ -128,9 +130,9 @@ func (p processor) processRows(limit int32) ([]int32, error) {
 }
 
 // randomly is slower than `processRows` even though parsing is faster + easier
-func (p processor) processArray(limit int32) ([]int32, error) {
+func (p processor) processArray(ctx context.Context, limit int32) ([]int32, error) {
 	var list pq.Int32Array
-	if err := p.arrParser.QueryRow(limit).Scan(&list); err != nil {
+	if err := p.arrParser.QueryRowContext(ctx, limit).Scan(&list); err != nil {
 		return nil, fmt.Errorf(`query/scan: %w`, err)
 	}
 	return list, nil
