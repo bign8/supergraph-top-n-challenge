@@ -8,8 +8,10 @@ RUN ${GOBUILD} \
     net/http/httptest \
     encoding/gob
 COPY go.* ./
-RUN go mod download
+RUN go mod download -x
 RUN ${GOBUILD} \
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc \
+    go.opentelemetry.io/otel/semconv/v1.20.0 \
     github.com/graph-gophers/dataloader/v7 \
     github.com/graphql-go/graphql \
     github.com/graphql-go/handler \

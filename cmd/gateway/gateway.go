@@ -19,6 +19,7 @@ import (
 	"github.com/graphql-go/handler"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
+	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
 )
 
 type Identified struct {
@@ -327,6 +328,7 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	tracing.Init(`gateway`)
 	schema, err := graphql.NewSchema(schema)
 	check(err)
 

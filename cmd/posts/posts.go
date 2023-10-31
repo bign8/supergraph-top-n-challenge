@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
+	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
 )
 
 func check(err error) {
@@ -23,6 +24,7 @@ const DSN = `postgres://postgres:postgrespassword@[::]:7432?sslmode=disable`
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	tracing.Init(`posts`)
 	p, err := newProcessor()
 	check(err)
 	l, err := net.Listen(`tcp`, `:8001`) // TODO: test UDP

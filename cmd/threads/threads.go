@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/gob"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"net"
 
 	"github.com/lib/pq"
+	"go.opentelemetry.io/otel"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
+	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
 )
 
 func check(err error) {
@@ -23,6 +26,7 @@ const DSN = `postgres://postgres:postgrespassword@[::]:8432?sslmode=disable`
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	tracing.Init(`threads`)
 	p, err := newProcessor()
 	check(err)
 	l, err := net.Listen(`tcp`, `:8002`) // TODO: test UDP
@@ -82,18 +86,25 @@ func (p processor) process(conn net.Conn) error {
 		} else if err != nil {
 			return fmt.Errorf(`decode: %w`, err)
 		}
+
+		_, span := otel.Tracer(``).Start(context.Background(), `processRequest`)
 		log.Printf(`got %d`, limit)
 
 		// query database
 		output, err := p.processRows(limit)
 		if err != nil {
+			span.RecordError(err)
+			span.End()
 			return fmt.Errorf(`process: %w`, err)
 		}
 
 		// write result
 		if err := writer.Encode(output); err != nil {
+			span.RecordError(err)
+			span.End()
 			return fmt.Errorf(`encode: %w`, err)
 		}
+		span.End()
 	}
 }
 

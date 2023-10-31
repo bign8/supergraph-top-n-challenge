@@ -12,6 +12,8 @@ services:
     environment:
       - POSTS_HOST=host.docker.internal:8001
       - THREADS_HOST=host.docker.internal:8002
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
 
   posts:
     build:
@@ -23,6 +25,8 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - POSTS_DSN=postgres://postgres:postgrespassword@host.docker.internal:7432?sslmode=disable
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
 
   threads:
     build:
@@ -34,3 +38,15 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - THREADS_DSN=postgres://postgres:postgrespassword@host.docker.internal:8432?sslmode=disable
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+
+  jaeger:
+    # https://www.jaegertracing.io/docs/latest/getting-started/
+    image: jaegertracing/all-in-one:latest
+    environment:
+      - LOG_LEVEL=error # default is rather chatty
+    ports:
+      - '16686:16686' # UI
+      - '4317:4317' # OTLP over gRPC
+      - '4318:4318' # OTLP over HTTP
