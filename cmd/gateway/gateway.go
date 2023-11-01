@@ -172,105 +172,14 @@ func check(err error) {
 	}
 }
 
-type tracer struct {
-	// TODO
-}
-
-type traceWapper struct {
-	Data       any `json:"data"`
-	Errors     any `json:"errors,omitempty"`
-	Extensions struct {
-		Tracing tracingExtension `json:"tracing"`
-	} `json:"extensions,omitempty"`
-}
-
-type tracingExtension struct {
-	Version int       `json:"version"`
-	Start   time.Time `json:"startTime"`
-	End     time.Time `json:"endTime"`
-	// Duration int `json:"duration"`
-	// TODO: parsing
-	// TODO: validation
-	Execution struct {
-		Resolvers []*resolverTrace `json:"resolvers"`
-	} `json:"execution"`
-}
-
-type resolverTrace struct {
-	Path     []any `json:"path"`
-	Start    uint  `json:"startOffset"`
-	Duration uint  `json:"duration"`
-}
+type tracer struct{}
 
 type ctxKey string
 
-const traceKey = ctxKey(`tracer`)
-const parentKey = ctxKey(`parent`)
 const loaderKey = ctxKey(`loader`)
-
-func (t tracer) wrap(h http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			h.ServeHTTP(w, r)
-			return
-		}
-
-		// TODO: convert to real tracing spec (rather than my home grown tracer based on an obsolete spec)
-		ctx, span := otel.Tracer(``).Start(r.Context(), r.Method+` `+r.URL.Path)
-		defer span.End()
-		h.ServeHTTP(w, r.WithContext(ctx))
-
-		// NOTE: the graphql tracing extension is deprecated, and adding >10ms to my requests.
-		// temporarily disabling to make faster!!!
-		/*
-
-			ext := &tracingExtension{
-				Version: 1,
-				Start:   time.Now(),
-			}
-
-			// TODO: and a trace recorder to the context
-			// TODO: record JSON response
-
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(w, r.WithContext(context.WithValue(ctx, traceKey, ext)))
-
-			_, subspan := otel.Tracer(``).Start(ctx, `addTracingExtension`)
-			defer subspan.End()
-			ext.End = time.Now()
-			// ext.Duration = int(ext.End.Sub(ext.Start))
-
-			// copy over response meta
-			res := rec.Result()
-			for key, values := range res.Header {
-				w.Header()[key] = values
-			}
-			w.WriteHeader(res.StatusCode)
-
-			// parse response
-			var wrap traceWapper
-			if err := json.NewDecoder(res.Body).Decode(&wrap); err != nil {
-				panic(err)
-			}
-			if err := res.Body.Close(); err != nil {
-				panic(err)
-			}
-
-			// TODO: embed traces from context
-			wrap.Extensions.Tracing = *ext
-
-			// TODO: write output
-			if err := json.NewEncoder(w).Encode(wrap); err != nil {
-				panic(err)
-			}
-		*/
-	}
-}
 
 func (t tracer) TraceQuery(ctx context.Context, queryString, operationName string) (context.Context, graphql.TraceQueryFinishFunc) {
 	ctx, span := otel.Tracer(``).Start(ctx, operationName)
-	// ctx = context.WithValue(ctx, parentKey, []any{operationName})
-
 	return ctx, func(fe []gqlerrors.FormattedError) {
 		// TODO: span errors
 		span.End()
@@ -283,38 +192,12 @@ func (t tracer) TraceField(ctx context.Context, fieldName, typeName string) (con
 	}
 
 	ctx, span := otel.Tracer(``).Start(ctx, fieldName+`.`+typeName)
-
-	// ext := ctx.Value(traceKey).(*tracingExtension)
-	// parents := append(ctx.Value(parentKey).([]any), fieldName, typeName)
-	// ctx = context.WithValue(ctx, parentKey, parents)
-
-	// start := time.Now()
-	// span := &resolverTrace{
-	// 	Path:  parents,
-	// 	Start: uint(time.Since(ext.Start)), // TODO: based on `start`
-	// }
-	// ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
-
 	return ctx, func(fe []gqlerrors.FormattedError) {
-		// span.Duration = uint(time.Since(start))
 		span.End()
 	}
 }
 
-// func (t tracer) TraceBatch() {
-// 	// TODO
-// }
-
 func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]int32] {
-	// time.Sleep(20 * time.Millisecond) // TODO: remove
-
-	// ext := ctx.Value(traceKey).(*tracingExtension)
-	// start := time.Now()
-	// span := &resolverTrace{
-	// 	Path:  []any{`batch`, `Post`},
-	// 	Start: uint(time.Since(ext.Start)),
-	// }
-	// ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
 
 	ctx, span := otel.Tracer(``).Start(ctx, `loadBatch`)
 	defer span.End()
@@ -346,8 +229,6 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 		}
 	}
 
-	// span.Duration = uint(time.Since(start))
-
 	return res
 }
 
@@ -374,7 +255,7 @@ func main() {
 		Tracer:     t,
 	})
 	mux := http.DefaultServeMux
-	mux.Handle(`/graphql`, t.wrap(h))
+	mux.Handle(`/graphql`, h)
 	mux.Handle(`/`, http.RedirectHandler(`/graphql`, http.StatusSeeOther))
 	server := http.Server{
 		Addr: `[::]:8000`,
@@ -392,7 +273,9 @@ func main() {
 func measure(h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		h.ServeHTTP(w, r)
+		ctx, span := otel.Tracer(``).Start(r.Context(), r.Method+` `+r.URL.Path)
+		defer span.End()
+		h.ServeHTTP(w, r.WithContext(ctx))
 		log.Printf(`%s %s %s`, r.Method, r.URL.Path, time.Since(start).Round(time.Nanosecond*100))
 	}
 }
