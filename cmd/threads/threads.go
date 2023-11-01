@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/uptrace/opentelemetry-go-extra/otelsql"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
@@ -49,16 +50,21 @@ type processor struct {
 }
 
 func newProcessor() (*processor, error) {
+	ctx, span := otel.Tracer(``).Start(context.Background(), `startup`)
+	defer span.End()
 	db, err := otelsql.Open(`postgres`, env.Default(`THREADS_DSN`, DSN))
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf(`sql.Open: %w`, err)
 	}
-	rowsParser, err := db.Prepare(`SELECT id FROM threads LIMIT $1;`)
+	rowsParser, err := db.PrepareContext(ctx, `SELECT id FROM threads LIMIT $1;`)
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf(`db.Prepare(rows): %w`, err)
 	}
-	arrParser, err := db.Prepare(`SELECT ARRAY_AGG(a.id) FROM (SELECT id FROM threads LIMIT $1) a;`)
+	arrParser, err := db.PrepareContext(ctx, `SELECT ARRAY_AGG(a.id) FROM (SELECT id FROM threads LIMIT $1) a;`)
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf(`db.Prepare(arr): %w`, err)
 	}
 	return &processor{
@@ -67,11 +73,10 @@ func newProcessor() (*processor, error) {
 	}, nil
 }
 
-/*
-Frame Format: (all values are int32)
-Input: [limit]
-Output: gob([thread1_id][thread2_id]...[threadN_id])
-*/
+type ThreadsRequest struct {
+	Limit   int32
+	Headers map[string]string
+}
 
 func (p processor) process(conn net.Conn) error {
 	defer conn.Close()
@@ -80,8 +85,8 @@ func (p processor) process(conn net.Conn) error {
 	for {
 
 		// parse input
-		var limit int32
-		if err := reader.Decode(&limit); err == io.EOF {
+		var req ThreadsRequest
+		if err := reader.Decode(&req); err == io.EOF {
 			log.Printf(`closing connection: %v`, conn.RemoteAddr())
 			return nil
 		} else if err != nil {
@@ -89,11 +94,13 @@ func (p processor) process(conn net.Conn) error {
 		}
 
 		// TODO: propagate span properties from request headers
-		ctx, span := otel.Tracer(``).Start(context.Background(), `processRequest`)
-		log.Printf(`got %d`, limit)
+		ctx := context.Background() // gotta start somewhere!
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(req.Headers))
+		ctx, span := otel.Tracer(``).Start(ctx, `processRequest`)
+		log.Printf(`got %d`, req.Limit)
 
 		// query database
-		output, err := p.processRows(ctx, limit)
+		output, err := p.processRows(ctx, req.Limit)
 		if err != nil {
 			span.RecordError(err)
 			span.End()

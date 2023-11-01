@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/uptrace/opentelemetry-go-extra/otelsql"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
@@ -50,15 +51,29 @@ type processor struct {
 }
 
 func newProcessor() (*processor, error) {
+	ctx, span := otel.Tracer(``).Start(context.Background(), `startup`)
+	defer span.End()
 	db, err := otelsql.Open(`postgres`, env.Default(`POSTS_DSN`, DSN))
-	check(err)
-	fetchThreadPostsViaRows, err := db.Prepare(`SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
-	check(err)
-	fetchThreadPostsViaArray, err := db.Prepare(`SELECT ARRAY(SELECT id FROM posts WHERE thread_id = $1 LIMIT $2);`)
-	check(err)
-	fetchMultiThreadPosts, err := db.Prepare(`SELECT thread_id, (array_agg(id))[1:$2] FROM posts
+	if err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf(`sql.Open: %w`, err)
+	}
+	fetchThreadPostsViaRows, err := db.PrepareContext(ctx, `SELECT id FROM posts WHERE thread_id = $1 LIMIT $2;`)
+	if err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf(`prepare(rows): %w`, err)
+	}
+	fetchThreadPostsViaArray, err := db.PrepareContext(ctx, `SELECT ARRAY(SELECT id FROM posts WHERE thread_id = $1 LIMIT $2);`)
+	if err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf(`prepare(array): %w`, err)
+	}
+	fetchMultiThreadPosts, err := db.PrepareContext(ctx, `SELECT thread_id, (array_agg(id))[1:$2] FROM posts
 		WHERE thread_id = ANY($1) GROUP BY thread_id;`)
-	check(err)
+	if err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf(`prepare(multi): %w`, err)
+	}
 	return &processor{
 		threadPostsViaRows:  fetchThreadPostsViaRows,
 		threadPostsViaArray: fetchThreadPostsViaArray,
@@ -69,6 +84,7 @@ func newProcessor() (*processor, error) {
 type PostsRequest struct {
 	Limit   int32
 	Threads []int32
+	Headers map[string]string
 }
 
 type PostsResponse struct {
@@ -92,7 +108,9 @@ func (p processor) processBatch(conn net.Conn) error {
 		}
 
 		// TODO: propagate span properties from request headers
-		ctx, span := otel.Tracer(``).Start(context.Background(), `processBatch`)
+		ctx := context.Background() // gotta start somewhere!
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(args.Headers))
+		ctx, span := otel.Tracer(``).Start(ctx, `processBatch`)
 
 		result := p.fetchBatchMulti(ctx, args)
 

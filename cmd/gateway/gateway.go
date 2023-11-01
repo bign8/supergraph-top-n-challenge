@@ -17,6 +17,8 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 	"github.com/graphql-go/handler"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
@@ -26,17 +28,32 @@ type Identified struct {
 	ID int32 `json:"id"`
 }
 
+type ThreadsRequest struct {
+	Limit   int32
+	Headers map[string]string
+}
+
 func resolveThreads(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
+	request := &ThreadsRequest{
+		Limit:   int32(limit),
+		Headers: make(map[string]string, 2),
+	}
+
+	ctx, span := otel.Tracer(``).Start(p.Context, `resolveThreads`)
+	defer span.End()
+
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(request.Headers))
 
 	// TODO: connection pooling
 	conn, err := net.Dial(`tcp`, env.Default(`THREADS_HOST`, `[::]:8002`))
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf(`dial: %w`, err)
 	}
 
 	// make request
-	if err := gob.NewEncoder(conn).Encode(int32(limit)); err != nil {
+	if err := gob.NewEncoder(conn).Encode(request); err != nil {
 		return nil, fmt.Errorf(`gob encode: %w`, err)
 	}
 
@@ -68,14 +85,21 @@ type PostRequest struct {
 type PostsRequest struct {
 	Limit   int32
 	Threads []int32
+	Headers map[string]string
 }
 
 type PostsResponse struct {
 	Posts map[int32][]int32
 }
 
-func (c client) postsBatch(limit int32, threads []int32) (map[int32][]int32, error) {
-	if err := c.enc.Encode(PostsRequest{Limit: limit, Threads: threads}); err != nil {
+func (c client) postsBatch(ctx context.Context, limit int32, threads []int32) (map[int32][]int32, error) {
+	req := PostsRequest{
+		Limit:   limit,
+		Threads: threads,
+		Headers: make(map[string]string, 2),
+	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(req.Headers))
+	if err := c.enc.Encode(req); err != nil {
 		return nil, fmt.Errorf(`encode: %w`, err)
 	}
 	var res PostsResponse
@@ -207,6 +231,10 @@ func (t tracer) wrap(h http.Handler) http.HandlerFunc {
 			return
 		}
 
+		// TODO: convert to real tracing spec (rather than my home grown tracer based on an obsolete spec)
+		ctx, span := otel.Tracer(``).Start(r.Context(), r.Method+` `+r.URL.Path)
+		defer span.End()
+
 		ext := &tracingExtension{
 			Version: 1,
 			Start:   time.Now(),
@@ -215,7 +243,7 @@ func (t tracer) wrap(h http.Handler) http.HandlerFunc {
 		// TODO: and a trace recorder to the context
 		// TODO: record JSON response
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), traceKey, ext)))
+		h.ServeHTTP(rec, r.WithContext(context.WithValue(ctx, traceKey, ext)))
 
 		ext.End = time.Now()
 		// ext.Duration = int(ext.End.Sub(ext.Start))
@@ -307,7 +335,7 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 	conn := pool.Get().(*client)
 	defer pool.Put(conn)
 
-	data, err := conn.postsBatch(limit, threads)
+	data, err := conn.postsBatch(ctx, limit, threads)
 	if err != nil {
 		for i := range res {
 			res[i] = &dataloader.Result[[]int32]{Error: err}
