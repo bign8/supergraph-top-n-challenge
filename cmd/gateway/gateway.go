@@ -115,9 +115,8 @@ var pool = sync.Pool{
 func resolvePostsBatch(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
 	thread := p.Source.(Identified)
-	loader := p.Context.Value(loaderKey).(func(context.Context, PostRequest) dataloader.Thunk[[]int32])
 
-	thunk := loader(p.Context, PostRequest{
+	thunk := loader.Load(p.Context, PostRequest{
 		Limit:  int32(limit),
 		Thread: thread.ID,
 	})
@@ -174,10 +173,6 @@ func check(err error) {
 
 type tracer struct{}
 
-type ctxKey string
-
-const loaderKey = ctxKey(`loader`)
-
 func (t tracer) TraceQuery(ctx context.Context, queryString, operationName string) (context.Context, graphql.TraceQueryFinishFunc) {
 	ctx, span := otel.Tracer(``).Start(ctx, operationName)
 	return ctx, func(fe []gqlerrors.FormattedError) {
@@ -232,38 +227,31 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 	return res
 }
 
+var loader = dataloader.NewBatchedLoader(
+	loadBatch,
+	dataloader.WithWait[PostRequest, []int32](time.Millisecond),
+	// dataloader.WithBatchCapacity[PostRequest, []int32](10),
+	dataloader.WithClearCacheOnBatch[PostRequest, []int32](),
+	// dataloader.WithTracer[PostRequest, []int32](t),
+	// TODO dataloader.WithTracer(t))
+)
+
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	tracing.Init(`gateway`)
 	schema, err := graphql.NewSchema(schema)
 	check(err)
 
-	t := &tracer{}
-
-	loader := dataloader.NewBatchedLoader(
-		loadBatch,
-		dataloader.WithWait[PostRequest, []int32](time.Millisecond),
-		// dataloader.WithBatchCapacity[PostRequest, []int32](10),
-		dataloader.WithClearCacheOnBatch[PostRequest, []int32](),
-		// dataloader.WithTracer[PostRequest, []int32](t),
-		// TODO dataloader.WithTracer(t))
-	)
-
 	h := handler.New(&handler.Config{
 		Schema:     &schema,
 		Playground: true,
-		Tracer:     t,
+		Tracer:     &tracer{},
 	})
 	mux := http.DefaultServeMux
 	mux.Handle(`/graphql`, h)
 	mux.Handle(`/`, http.RedirectHandler(`/graphql`, http.StatusSeeOther))
 	server := http.Server{
-		Addr: `[::]:8000`,
-		BaseContext: func(l net.Listener) context.Context {
-			ctx := context.Background()
-			ctx = context.WithValue(ctx, loaderKey, loader.Load)
-			return ctx
-		},
+		Addr:    `[::]:8000`,
 		Handler: measure(mux),
 	}
 	log.Printf(`gateway on %v`, server.Addr)
