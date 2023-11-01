@@ -8,10 +8,12 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
 )
 
 // postgres populated with data from db/posts.sql
-var request = PostsRequest{
+var request = domain.PostsRequest{
 	Limit: 4000, // larger than all results
 	Threads: []int32{
 		1704120699,
@@ -57,7 +59,7 @@ var request = PostsRequest{
 	},
 }
 
-func checkResults(tb testing.TB, res PostsResponse) {
+func checkResults(tb testing.TB, res domain.PostsResponse) {
 	assert.Len(tb, res.Posts, 40)
 	if request.Limit < 1997 {
 		assert.Len(tb, res.Posts[1704120699], int(request.Limit))
@@ -102,19 +104,19 @@ func BenchmarkMulti(b *testing.B) {
 
 func BenchmarkFanOutArray(b *testing.B) {
 	p := connect(b)
-	benchmark(b, func(_ context.Context, pr PostsRequest) PostsResponse {
+	benchmark(b, func(_ context.Context, pr domain.PostsRequest) domain.PostsResponse {
 		return p.fetchBatchFanOut(pr, p.fetchThreadPostsViaArray)
 	})
 }
 
 func BenchmarkFanOutRows(b *testing.B) {
 	p := connect(b)
-	benchmark(b, func(_ context.Context, pr PostsRequest) PostsResponse {
+	benchmark(b, func(_ context.Context, pr domain.PostsRequest) domain.PostsResponse {
 		return p.fetchBatchFanOut(pr, p.fetchThreadPostsViaRows)
 	})
 }
 
-func benchmark(b *testing.B, subject func(context.Context, PostsRequest) PostsResponse) {
+func benchmark(b *testing.B, subject func(context.Context, domain.PostsRequest) domain.PostsResponse) {
 	for i := 0; i < b.N; i++ {
 		res := subject(context.Background(), request)
 		checkResults(b, res)
@@ -124,7 +126,7 @@ func benchmark(b *testing.B, subject func(context.Context, PostsRequest) PostsRe
 /// KEEPING THE FOLLOWING AROUND FOR TESTING COMPARISON
 
 // TODO: measure (used in processBatch)
-func (p processor) fetchBatchFanOut(args PostsRequest, fn func(threadID, limit int32) ([]int32, error)) PostsResponse {
+func (p processor) fetchBatchFanOut(args domain.PostsRequest, fn func(threadID, limit int32) ([]int32, error)) domain.PostsResponse {
 	// TODO: short circut if only 1 thread fetched
 
 	// start := time.Now()
@@ -144,7 +146,7 @@ func (p processor) fetchBatchFanOut(args PostsRequest, fn func(threadID, limit i
 	wg.Wait()
 
 	// serialize
-	result := PostsResponse{
+	result := domain.PostsResponse{
 		Posts: make(map[int32][]int32, int(args.Limit)),
 	}
 	stage.Range(func(key, value any) bool {

@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
 )
@@ -81,16 +82,6 @@ func newProcessor() (*processor, error) {
 	}, nil
 }
 
-type PostsRequest struct {
-	Limit   int32
-	Threads []int32
-	Headers map[string]string
-}
-
-type PostsResponse struct {
-	Posts map[int32][]int32
-}
-
 func (p processor) processBatch(conn net.Conn) error {
 	defer conn.Close()
 	reader := gob.NewDecoder(conn)
@@ -99,7 +90,7 @@ func (p processor) processBatch(conn net.Conn) error {
 	for {
 
 		// parse input
-		var args PostsRequest
+		var args domain.PostsRequest
 		if err := reader.Decode(&args); err == io.EOF {
 			log.Printf(`closing connection: %v`, conn.RemoteAddr())
 			return nil
@@ -125,9 +116,9 @@ func (p processor) processBatch(conn net.Conn) error {
 }
 
 // TODO: measure (used in processBatch)
-func (p processor) fetchBatchMulti(ctx context.Context, args PostsRequest) PostsResponse {
+func (p processor) fetchBatchMulti(ctx context.Context, args domain.PostsRequest) domain.PostsResponse {
 	// start := time.Now()
-	result := PostsResponse{
+	result := domain.PostsResponse{
 		Posts: make(map[int32][]int32, len(args.Threads)),
 	}
 

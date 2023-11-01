@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
 )
@@ -28,14 +29,9 @@ type Identified struct {
 	ID int32 `json:"id"`
 }
 
-type ThreadsRequest struct {
-	Limit   int32
-	Headers map[string]string
-}
-
 func resolveThreads(p graphql.ResolveParams) (any, error) {
 	limit := p.Args[`limit`].(int)
-	request := &ThreadsRequest{
+	request := &domain.ThreadsRequest{
 		Limit:   int32(limit),
 		Headers: make(map[string]string, 2),
 	}
@@ -82,18 +78,8 @@ type PostRequest struct {
 	Thread int32
 }
 
-type PostsRequest struct {
-	Limit   int32
-	Threads []int32
-	Headers map[string]string
-}
-
-type PostsResponse struct {
-	Posts map[int32][]int32
-}
-
 func (c client) postsBatch(ctx context.Context, limit int32, threads []int32) (map[int32][]int32, error) {
-	req := PostsRequest{
+	req := domain.PostsRequest{
 		Limit:   limit,
 		Threads: threads,
 		Headers: make(map[string]string, 2),
@@ -102,7 +88,7 @@ func (c client) postsBatch(ctx context.Context, limit int32, threads []int32) (m
 	if err := c.enc.Encode(req); err != nil {
 		return nil, fmt.Errorf(`encode: %w`, err)
 	}
-	var res PostsResponse
+	var res domain.PostsResponse
 	if err := c.dec.Decode(&res); err != nil {
 		return nil, fmt.Errorf(`decode: %w`, err)
 	}

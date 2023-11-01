@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
 	"github.com/bign8/supergraph-top-n-challenge/lib/env"
 	"github.com/bign8/supergraph-top-n-challenge/lib/tracing"
 )
@@ -73,11 +74,6 @@ func newProcessor() (*processor, error) {
 	}, nil
 }
 
-type ThreadsRequest struct {
-	Limit   int32
-	Headers map[string]string
-}
-
 func (p processor) process(conn net.Conn) error {
 	defer conn.Close()
 	reader := gob.NewDecoder(conn)
@@ -85,7 +81,7 @@ func (p processor) process(conn net.Conn) error {
 	for {
 
 		// parse input
-		var req ThreadsRequest
+		var req domain.ThreadsRequest
 		if err := reader.Decode(&req); err == io.EOF {
 			log.Printf(`closing connection: %v`, conn.RemoteAddr())
 			return nil

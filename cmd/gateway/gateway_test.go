@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/graphql-go/graphql"
+
+	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
 )
 
 // tested bia graphiql
@@ -13,10 +15,10 @@ func (c client) posts(threadID, limit int32) ([]Identified, error) {
 	// if err := c.enc.Encode([2]int32{limit, threadID}); err != nil {
 	// 	return nil, fmt.Errorf(`encode: %w`, err)
 	// }
-	if err := c.enc.Encode(PostsRequest{Limit: limit, Threads: []int32{threadID}}); err != nil {
+	if err := c.enc.Encode(domain.PostsRequest{Limit: limit, Threads: []int32{threadID}}); err != nil {
 		return nil, fmt.Errorf(`encode: %w`, err)
 	}
-	var batch PostsResponse
+	var batch domain.PostsResponse
 	if err := c.dec.Decode(&batch); err != nil {
 		return nil, fmt.Errorf(`decode: %w`, err)
 	}
