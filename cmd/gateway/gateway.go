@@ -3,13 +3,11 @@ package main
 import (
 	"context"
 	"encoding/gob"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"time"
 
@@ -220,55 +218,62 @@ func (t tracer) wrap(h http.Handler) http.HandlerFunc {
 		// TODO: convert to real tracing spec (rather than my home grown tracer based on an obsolete spec)
 		ctx, span := otel.Tracer(``).Start(r.Context(), r.Method+` `+r.URL.Path)
 		defer span.End()
+		h.ServeHTTP(w, r.WithContext(ctx))
 
-		ext := &tracingExtension{
-			Version: 1,
-			Start:   time.Now(),
-		}
+		// NOTE: the graphql tracing extension is deprecated, and adding >10ms to my requests.
+		// temporarily disabling to make faster!!!
+		/*
 
-		// TODO: and a trace recorder to the context
-		// TODO: record JSON response
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, r.WithContext(context.WithValue(ctx, traceKey, ext)))
+			ext := &tracingExtension{
+				Version: 1,
+				Start:   time.Now(),
+			}
 
-		ext.End = time.Now()
-		// ext.Duration = int(ext.End.Sub(ext.Start))
+			// TODO: and a trace recorder to the context
+			// TODO: record JSON response
 
-		// copy over response meta
-		res := rec.Result()
-		for key, values := range res.Header {
-			w.Header()[key] = values
-		}
-		w.WriteHeader(res.StatusCode)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(w, r.WithContext(context.WithValue(ctx, traceKey, ext)))
 
-		// parse response
-		var wrap traceWapper
-		if err := json.NewDecoder(res.Body).Decode(&wrap); err != nil {
-			panic(err)
-		}
-		if err := res.Body.Close(); err != nil {
-			panic(err)
-		}
+			_, subspan := otel.Tracer(``).Start(ctx, `addTracingExtension`)
+			defer subspan.End()
+			ext.End = time.Now()
+			// ext.Duration = int(ext.End.Sub(ext.Start))
 
-		// TODO: embed traces from context
-		wrap.Extensions.Tracing = *ext
+			// copy over response meta
+			res := rec.Result()
+			for key, values := range res.Header {
+				w.Header()[key] = values
+			}
+			w.WriteHeader(res.StatusCode)
 
-		// TODO: write output
-		if err := json.NewEncoder(w).Encode(wrap); err != nil {
-			panic(err)
-		}
+			// parse response
+			var wrap traceWapper
+			if err := json.NewDecoder(res.Body).Decode(&wrap); err != nil {
+				panic(err)
+			}
+			if err := res.Body.Close(); err != nil {
+				panic(err)
+			}
+
+			// TODO: embed traces from context
+			wrap.Extensions.Tracing = *ext
+
+			// TODO: write output
+			if err := json.NewEncoder(w).Encode(wrap); err != nil {
+				panic(err)
+			}
+		*/
 	}
 }
 
 func (t tracer) TraceQuery(ctx context.Context, queryString, operationName string) (context.Context, graphql.TraceQueryFinishFunc) {
-
-	log.Printf(`traceQuery: start %q`, operationName)
-	ctx = context.WithValue(ctx, parentKey, []any{operationName})
+	ctx, span := otel.Tracer(``).Start(ctx, operationName)
+	// ctx = context.WithValue(ctx, parentKey, []any{operationName})
 
 	return ctx, func(fe []gqlerrors.FormattedError) {
-
-		log.Printf(`traceQuery: end %q`, operationName)
-
+		// TODO: span errors
+		span.End()
 	}
 }
 
@@ -277,19 +282,22 @@ func (t tracer) TraceField(ctx context.Context, fieldName, typeName string) (con
 		return ctx, func(fe []gqlerrors.FormattedError) { /* noop for IDs */ }
 	}
 
-	ext := ctx.Value(traceKey).(*tracingExtension)
-	parents := append(ctx.Value(parentKey).([]any), fieldName, typeName)
-	ctx = context.WithValue(ctx, parentKey, parents)
+	ctx, span := otel.Tracer(``).Start(ctx, fieldName+`.`+typeName)
 
-	start := time.Now()
-	span := &resolverTrace{
-		Path:  parents,
-		Start: uint(time.Since(ext.Start)), // TODO: based on `start`
-	}
-	ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
+	// ext := ctx.Value(traceKey).(*tracingExtension)
+	// parents := append(ctx.Value(parentKey).([]any), fieldName, typeName)
+	// ctx = context.WithValue(ctx, parentKey, parents)
+
+	// start := time.Now()
+	// span := &resolverTrace{
+	// 	Path:  parents,
+	// 	Start: uint(time.Since(ext.Start)), // TODO: based on `start`
+	// }
+	// ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
 
 	return ctx, func(fe []gqlerrors.FormattedError) {
-		span.Duration = uint(time.Since(start))
+		// span.Duration = uint(time.Since(start))
+		span.End()
 	}
 }
 
@@ -300,13 +308,16 @@ func (t tracer) TraceField(ctx context.Context, fieldName, typeName string) (con
 func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]int32] {
 	// time.Sleep(20 * time.Millisecond) // TODO: remove
 
-	ext := ctx.Value(traceKey).(*tracingExtension)
-	start := time.Now()
-	span := &resolverTrace{
-		Path:  []any{`batch`, `Post`},
-		Start: uint(time.Since(ext.Start)),
-	}
-	ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
+	// ext := ctx.Value(traceKey).(*tracingExtension)
+	// start := time.Now()
+	// span := &resolverTrace{
+	// 	Path:  []any{`batch`, `Post`},
+	// 	Start: uint(time.Since(ext.Start)),
+	// }
+	// ext.Execution.Resolvers = append(ext.Execution.Resolvers, span)
+
+	ctx, span := otel.Tracer(``).Start(ctx, `loadBatch`)
+	defer span.End()
 
 	limit := keys[0].Limit
 	threads := make([]int32, len(keys))
@@ -335,7 +346,7 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 		}
 	}
 
-	span.Duration = uint(time.Since(start))
+	// span.Duration = uint(time.Since(start))
 
 	return res
 }
