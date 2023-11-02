@@ -1,9 +1,28 @@
 import http from "k6/http";
-import { check, fail, sleep } from "k6";
+import { check } from "k6";
 
 export const options = {
-  vus: 100,
-  duration: '1s', //'60s',
+  // vus: 100,
+  // duration: '1s', //'60s',
+  scenarios: {
+
+    contacts: {
+
+      executor: 'constant-arrival-rate',
+
+      // How long the test lasts
+      duration: '10s',
+
+      // How many iterations per timeUnit
+      rate: 100,
+
+      // Start `rate` iterations per second
+      timeUnit: '1s',
+
+      // Pre-allocate VUs
+      preAllocatedVUs: 50,
+    },
+  },
 };
 
 const query = `query MagicSauce($threadLimit: Int!, $postLimit: Int!) {
