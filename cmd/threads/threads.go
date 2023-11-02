@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/uptrace/opentelemetry-go-extra/otelsql"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
@@ -93,7 +94,7 @@ func (p processor) process(conn net.Conn) error {
 		ctx := context.Background() // gotta start somewhere!
 		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(req.Headers))
 		ctx, span := otel.Tracer(``).Start(ctx, `processRequest`)
-		log.Printf(`got %d`, req.Limit)
+		span.SetAttributes(attribute.Int(`limit`, int(req.Limit)))
 
 		// query database
 		output, err := p.processRows(ctx, req.Limit)

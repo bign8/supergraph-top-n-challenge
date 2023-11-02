@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/graphql-go/graphql/gqlerrors"
 	"github.com/graphql-go/handler"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/bign8/supergraph-top-n-challenge/lib/domain"
@@ -28,33 +30,19 @@ type Identified struct {
 }
 
 func resolveThreads(p graphql.ResolveParams) (any, error) {
-	limit := p.Args[`limit`].(int)
-	request := &domain.ThreadsRequest{
-		Limit:   int32(limit),
-		Headers: make(map[string]string, 2),
-	}
-
 	ctx, span := otel.Tracer(``).Start(p.Context, `resolveThreads`)
 	defer span.End()
 
-	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(request.Headers))
+	limit := p.Args[`limit`].(int)
+	span.SetAttributes(attribute.Int(`limit`, limit))
 
-	// TODO: connection pooling
-	conn, err := net.Dial(`tcp`, env.Default(`THREADS_HOST`, `[::]:8002`))
+	c := threadsPool.Get().(*client)
+	defer threadsPool.Put(c)
+
+	res, err := c.threads(ctx, int32(limit))
 	if err != nil {
 		span.RecordError(err)
-		return nil, fmt.Errorf(`dial: %w`, err)
-	}
-
-	// make request
-	if err := gob.NewEncoder(conn).Encode(request); err != nil {
-		return nil, fmt.Errorf(`gob encode: %w`, err)
-	}
-
-	// process response
-	var res []int32
-	if err := gob.NewDecoder(conn).Decode(&res); err != nil {
-		return nil, fmt.Errorf(`gob decode: %w`, err)
+		return nil, fmt.Errorf(`client.Threads: %w`, err)
 	}
 
 	// convert to model
@@ -62,7 +50,7 @@ func resolveThreads(p graphql.ResolveParams) (any, error) {
 	for i, id := range res {
 		output[i].ID = id
 	}
-	return output, conn.Close()
+	return output, nil
 }
 
 type client struct {
@@ -93,7 +81,28 @@ func (c client) postsBatch(ctx context.Context, limit int32, threads []int32) (m
 	return res.Posts, nil
 }
 
-var pool = sync.Pool{
+func (c client) threads(ctx context.Context, limit int32) ([]int32, error) {
+	request := &domain.ThreadsRequest{
+		Limit:   int32(limit),
+		Headers: make(map[string]string, 2),
+	}
+
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(request.Headers))
+
+	// make request
+	if err := c.enc.Encode(request); err != nil {
+		return nil, fmt.Errorf(`gob encode: %w`, err)
+	}
+
+	// process response
+	var res []int32
+	if err := c.dec.Decode(&res); err != nil {
+		return nil, fmt.Errorf(`gob decode: %w`, err)
+	}
+	return res, nil
+}
+
+var postsPool = sync.Pool{
 	New: func() any {
 		conn, err := net.Dial(`tcp`, env.Default(`POSTS_HOST`, `[::]:8001`))
 		if err != nil {
@@ -109,6 +118,21 @@ var pool = sync.Pool{
 		// runtime.SetFinalizer(c, c.conn.Close)
 
 		return c
+	},
+}
+
+var threadsPool = sync.Pool{
+	New: func() any {
+		conn, err := net.Dial(`tcp`, env.Default(`THREADS_HOST`, `[::]:8002`))
+		if err != nil {
+			panic(err)
+		}
+		log.Printf(`New connection to threads: %v`, conn.LocalAddr())
+		return &client{
+			conn: conn,
+			enc:  gob.NewEncoder(conn),
+			dec:  gob.NewDecoder(conn),
+		}
 	},
 }
 
@@ -207,8 +231,8 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 	}
 	res := make([]*dataloader.Result[[]int32], len(keys))
 
-	conn := pool.Get().(*client)
-	defer pool.Put(conn)
+	conn := postsPool.Get().(*client)
+	defer postsPool.Put(conn)
 
 	data, err := conn.postsBatch(ctx, limit, threads)
 	if err != nil {
@@ -231,7 +255,7 @@ var loader = dataloader.NewBatchedLoader(
 	loadBatch,
 	dataloader.WithWait[PostRequest, []int32](time.Millisecond),
 	// dataloader.WithBatchCapacity[PostRequest, []int32](10),
-	dataloader.WithClearCacheOnBatch[PostRequest, []int32](),
+	dataloader.WithClearCacheOnBatch[PostRequest, []int32](), // clearing batches in good faith
 	// dataloader.WithTracer[PostRequest, []int32](t),
 	// TODO dataloader.WithTracer(t))
 )
