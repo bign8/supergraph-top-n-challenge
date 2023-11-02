@@ -146,6 +146,8 @@ func resolvePostsBatch(p graphql.ResolveParams) (any, error) {
 	})
 
 	return func() (any, error) {
+		_, span := otel.Tracer(``).Start(p.Context, `resolvePostsBatchThunk`)
+		defer span.End()
 		posts, err := thunk()
 		out := make([]Identified, len(posts))
 		for i, postID := range posts {
@@ -253,7 +255,7 @@ func loadBatch(ctx context.Context, keys []PostRequest) []*dataloader.Result[[]i
 
 var loader = dataloader.NewBatchedLoader(
 	loadBatch,
-	dataloader.WithWait[PostRequest, []int32](time.Millisecond),
+	dataloader.WithWait[PostRequest, []int32](100*time.Nanosecond), // this should be bucket size based on threads response
 	// dataloader.WithBatchCapacity[PostRequest, []int32](10),
 	dataloader.WithClearCacheOnBatch[PostRequest, []int32](), // clearing batches in good faith
 	// dataloader.WithTracer[PostRequest, []int32](t),

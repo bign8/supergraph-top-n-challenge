@@ -1,27 +1,20 @@
-import http from "k6/http";
+import { post } from "k6/http";
 import { check } from "k6";
 
 export const options = {
-  // vus: 100,
-  // duration: '1s', //'60s',
   scenarios: {
-
-    contacts: {
-
+    '100rps': {
       executor: 'constant-arrival-rate',
-
-      // How long the test lasts
-      duration: '10s',
-
-      // How many iterations per timeUnit
-      rate: 100,
-
-      // Start `rate` iterations per second
-      timeUnit: '1s',
-
-      // Pre-allocate VUs
-      preAllocatedVUs: 50,
+      duration: '10s',     // How long the test lasts
+      rate: 100,           // How many iterations per timeUnit
+      timeUnit: '1s',      // Start `rate` iterations per second
+      preAllocatedVUs: 50, // Pre-allocate VUs
     },
+    // 'burst': {
+    //   executor: 'constant-vus',
+    //   duration: '1s', // this test is really heavy!
+    //   vus: 100
+    // }
   },
 };
 
@@ -38,7 +31,7 @@ const THREADS = 4;
 const POSTS = 20;
 
 export default function() {
-  let res = http.post(__ENV.GRAPHQL_ENDPOINT,
+  let res = post(__ENV.GRAPHQL_ENDPOINT,
     JSON.stringify({
       operationName: `MagicSauce`,
       query: query,
