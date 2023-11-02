@@ -3,27 +3,41 @@ import { check, fail, sleep } from "k6";
 
 export const options = {
   vus: 100,
-  duration: '60s',
+  duration: '1s', //'60s',
 };
 
+const query = `query MagicSauce($threadLimit: Int!, $postLimit: Int!) {
+  threads(limit: $threadLimit) {
+    id
+    posts(limit: $postLimit) {
+      id
+    }
+  }
+}`;
+
+const THREADS = 4;
+const POSTS = 20;
+
 export default function() {
-  let query = ``; // TODO
-  let graphqlEndpoint = `${__ENV.GRAPHQL_ENDPOINT}`;
-
-  let headers = {
-    "Content-Type": "application/json"
-  };
-
-  let res = http.post(graphqlEndpoint,
-    JSON.stringify({ query: query }),
-    {headers: headers}
+  let res = http.post(__ENV.GRAPHQL_ENDPOINT,
+    JSON.stringify({
+      operationName: `MagicSauce`,
+      query: query,
+      variables: {
+        threadLimit: THREADS,
+        postLimit: POSTS,
+      }
+    }),
+    {
+      headers: {
+        "Content-Type": "application/json"
+      }
+    }
   );
 
-  if (
-    check(res, {
-      'graphql errors': (res) => res.json().data.errors !== undefined,
-    })
-  ) {
-    fail('graphql response error');
-  }
+  check(res.json().data, {
+    'graphql errors': data => !data.hasOwnProperty('errors') || data.errors.length === 0,
+    'threads': data => data.threads.length === THREADS,
+    'thread posts': data => data.threads.every(thread => thread.posts.length === POSTS)
+  })
 }
