@@ -5,7 +5,7 @@ export const options = {
   scenarios: {
     '100rps': {
       executor: 'constant-arrival-rate',
-      duration: '10s',     // How long the test lasts
+      duration: '30s',     // How long the test lasts
       rate: 100,           // How many iterations per timeUnit
       timeUnit: '1s',      // Start `rate` iterations per second
       preAllocatedVUs: 50, // Pre-allocate VUs
